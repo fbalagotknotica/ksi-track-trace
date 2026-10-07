@@ -1,0 +1,267 @@
+import { useEffect, useMemo, useState } from 'react';
+import { io } from 'socket.io-client';
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+const socket = io(API_URL, { transports: ['websocket'] });
+
+const formatDate = (value) => {
+  if (!value) return 'N/A';
+  return new Date(value).toLocaleString();
+};
+
+const statusStyle = (status) => {
+  const palette = {
+    Booked: '#3b82f6',
+    'Picked Up': '#60a5fa',
+    'In Transit': '#8b5cf6',
+    Consolidated: '#f59e0b',
+    'Customs Hold': '#f97316',
+    Cleared: '#10b981',
+    'Arrived at Port': '#14b8a6',
+    Dispatched: '#ec4899',
+    Delivered: '#22c55e',
+    Delayed: '#ef4444',
+    Exception: '#dc2626'
+  };
+
+  return {
+    background: `${palette[status] || '#64748b'}20`,
+    color: palette[status] || '#64748b',
+    border: `1px solid ${palette[status] || '#64748b'}55`
+  };
+};
+
+export default function App() {
+  const [summary, setSummary] = useState({ total: 0, inTransit: 0, delayed: 0, delivered: 0, activeAlerts: 0 });
+  const [shipments, setShipments] = useState([]);
+  const [selectedId, setSelectedId] = useState('');
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  const fetchData = async () => {
+    try {
+      const [summaryRes, shipmentsRes] = await Promise.all([
+        fetch(`${API_URL}/api/dashboard/summary`),
+        fetch(`${API_URL}/api/shipments`)
+      ]);
+
+      const summaryData = await summaryRes.json();
+      const shipmentsData = await shipmentsRes.json();
+
+      setSummary(summaryData.data || summary);
+      setShipments(shipmentsData.data || []);
+
+      if (!selectedId && shipmentsData.data?.length) {
+        setSelectedId(shipmentsData.data[0].id);
+      }
+    } catch (error) {
+      console.error('API unavailable, using mock data fallback', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+
+    socket.on('connection:ready', (msg) => {
+      console.log(msg.message);
+    });
+
+    socket.on('shipment:updated', (update) => {
+      setShipments((current) => current.map((shipment) =>
+        shipment.id === update.shipmentId ? update.shipment : shipment
+      ));
+      setSummary((current) => ({
+        ...current,
+        inTransit: current.inTransit + (update.shipment.status === 'In Transit' ? 1 : 0),
+        delayed: current.delayed + (update.shipment.status === 'Customs Hold' || update.shipment.status === 'Delayed' ? 1 : 0)
+      }));
+    });
+
+    return () => socket.disconnect();
+  }, []);
+
+  const filteredShipments = useMemo(() => {
+    if (!search.trim()) return shipments;
+    return shipments.filter((shipment) =>
+      [shipment.bookingNumber, shipment.billOfLading, shipment.clientName, shipment.id, shipment.status]
+        .join(' ')
+        .toLowerCase()
+        .includes(search.toLowerCase())
+    );
+  }, [shipments, search]);
+
+  const selectedShipment = filteredShipments.find((shipment) => shipment.id === selectedId) || shipments[0] || null;
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand-block">
+          <div className="brand-logo">KSI</div>
+          <div>
+            <p className="eyebrow">Cargo Control</p>
+            <h1>KSI Track and Trace</h1>
+          </div>
+        </div>
+
+        <nav className="nav">
+          <button className="nav-item is-active">Overview</button>
+          <button className="nav-item">Shipments</button>
+          <button className="nav-item">Exceptions</button>
+          <button className="nav-item">Warehouse</button>
+          <button className="nav-item">Reports</button>
+        </nav>
+      </aside>
+
+      <main className="main-panel">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">Operations dashboard</p>
+            <h2>Shipment visibility</h2>
+          </div>
+          <div className="topbar-actions">
+            <button className="primary-button">New shipment</button>
+          </div>
+        </header>
+
+        <section className="stats-grid">
+          <div className="stat-card">
+            <span>Total shipments</span>
+            <strong>{summary.total}</strong>
+            <small>Active trackings</small>
+          </div>
+          <div className="stat-card success">
+            <span>In transit</span>
+            <strong>{summary.inTransit}</strong>
+            <small>Current route</small>
+          </div>
+          <div className="stat-card warning">
+            <span>Delayed</span>
+            <strong>{summary.delayed}</strong>
+            <small>Needs attention</small>
+          </div>
+          <div className="stat-card danger">
+            <span>Delivered</span>
+            <strong>{summary.delivered}</strong>
+            <small>Completed</small>
+          </div>
+        </section>
+
+        <section className="content-grid">
+          <div className="list-panel">
+            <div className="panel-header">
+              <h3>Shipments</h3>
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by booking, client or status"
+              />
+            </div>
+
+            {loading ? (
+              <div className="loading">Loading cargo data...</div>
+            ) : (
+              <div className="shipment-list">
+                {filteredShipments.map((shipment) => (
+                  <button
+                    key={shipment.id}
+                    className={`shipment-item ${selectedShipment?.id === shipment.id ? 'active' : ''}`}
+                    onClick={() => setSelectedId(shipment.id)}
+                  >
+                    <div className="shipment-topline">
+                      <strong>{shipment.id}</strong>
+                      <span className="status-badge" style={statusStyle(shipment.status)}>{shipment.status}</span>
+                    </div>
+                    <div className="shipment-meta">
+                      <span>{shipment.shipmentType}</span>
+                      <span>{shipment.clientName}</span>
+                    </div>
+                    <div className="shipment-route">{shipment.origin} → {shipment.destination}</div>
+                    <div className="shipment-progress">
+                      <div className="bar"><span style={{ width: `${shipment.progress || 0}%` }} /></div>
+                      <small>{shipment.progress || 0}%</small>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="detail-panel">
+            {selectedShipment ? (
+              <>
+                <div className="detail-header">
+                  <div>
+                    <p className="eyebrow">Shipment detail</p>
+                    <h3>{selectedShipment.id}</h3>
+                  </div>
+                  <span className="status-badge" style={statusStyle(selectedShipment.status)}>{selectedShipment.status}</span>
+                </div>
+
+                <div className="detail-grid">
+                  <div>
+                    <label>Booking number</label>
+                    <strong>{selectedShipment.bookingNumber}</strong>
+                  </div>
+                  <div>
+                    <label>Shipment type</label>
+                    <strong>{selectedShipment.shipmentType}</strong>
+                  </div>
+                  <div>
+                    <label>Current location</label>
+                    <strong>{selectedShipment.currentLocation}</strong>
+                  </div>
+                  <div>
+                    <label>ETA</label>
+                    <strong>{selectedShipment.eta}</strong>
+                  </div>
+                </div>
+
+                <div className="route-box">
+                  <div>
+                    <p>Route</p>
+                    <strong>{selectedShipment.route}</strong>
+                  </div>
+                  <div>
+                    <p>Last updated</p>
+                    <strong>{formatDate(selectedShipment.lastUpdated)}</strong>
+                  </div>
+                </div>
+
+                <div className="timeline">
+                  {selectedShipment.milestones?.map((milestone, index) => (
+                    <div key={`${milestone.label}-${index}`} className="timeline-item">
+                      <span className="dot" />
+                      <div>
+                        <strong>{milestone.label}</strong>
+                        <small>{milestone.date}</small>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="event-panel">
+                  <h4>Event log</h4>
+                  {selectedShipment.events?.map((event) => (
+                    <div key={event.id} className="event-item">
+                      <div className="event-head">
+                        <strong>{event.status}</strong>
+                        <span>{formatDate(event.timestamp)}</span>
+                      </div>
+                      <p>{event.note}</p>
+                      <small>{event.location}</small>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="empty-state">No shipment selected</div>
+            )}
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}

@@ -1,0 +1,19 @@
+{
+  "name": "ksi-track-trace",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace @ksi/api\" \"npm run dev --workspace @ksi/web\"",
+    "dev:api": "npm run dev --workspace @ksi/api",
+    "dev:web": "npm run dev --workspace @ksi/web",
+    "build": "npm run build --workspace @ksi/web",
+    "start": "npm run start --workspace @ksi/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}
